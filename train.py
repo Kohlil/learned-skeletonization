@@ -226,6 +226,7 @@ def train(config: Config) -> float:
         avg_val_loss = running_val_loss / len(val_loader)
         train_losses.append(avg_train_loss)
         val_losses.append(avg_val_loss)
+        best_val_loss = min(best_val_loss, avg_val_loss)
 
         if not is_hyperopt:
             save_predictions(inputs, outputs, epoch + 1)
@@ -236,8 +237,7 @@ def train(config: Config) -> float:
         # Save best model so far
         if is_hyperopt:
             continue
-        elif avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
+        elif avg_val_loss == best_val_loss:
             epochs_without_improvement = 0
             torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
             print(
@@ -281,7 +281,7 @@ def objective(params: Dict[str, Any], trials_obj: Trials, max_evals: int):
         beta=params["beta"],
         gamma=params["gamma"],
         base_filters=int(params["base_filters"]),
-        epochs=10,  # or however many you want
+        epochs=30,
     )
     val_loss = train(config)
 
@@ -350,7 +350,7 @@ if __name__ == "__main__":
 
     if args.ablation:
         os.environ["HYPEROPT"] = "1"  # used to prevent saving checkpoints during search
-        max_evals = 100
+        max_evals = 30
         trials = Trials()
         best = fmin(
             fn=partial(objective, trials_obj=trials, max_evals=max_evals),
