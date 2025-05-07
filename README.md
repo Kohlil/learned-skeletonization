@@ -11,7 +11,6 @@ This project implements a deep learning pipeline for **road skeletonization** fr
   - [Project Overview](#project-overview)
   - [Installation](#installation)
   - [Usage](#usage)
-    - [Prepare Data](#prepare-data)
     - [Train Model](#train-model)
     - [Test Model](#test-model)
   - [Model Architecture](#model-architecture)
@@ -32,28 +31,12 @@ This project aims to generate 1-pixel-wide **road skeleton maps** from input aer
 You can install the required dependencies using the provided installation script:
 
 ```bash
-bash install.sh
-```
-
-Alternatively, install manually:
-
-```bash
-pip install -r requirements.txt
+bash setup.sh
 ```
 
 ---
 
 ## Usage
-
-### Prepare Data
-
-First, prepare your dataset using:
-
-```bash
-python make_data.py
-```
-
-This script preprocesses raw data into training, validation, and testing folders.
 
 ### Train Model
 
@@ -93,7 +76,7 @@ Implemented in `model.py`.
 
 | File           | Description                                   |
 | -------------- | --------------------------------------------- |
-| `install.sh`   | Installs the required Python packages.        |
+| `setup.sh`     | Installs the required Python packages.        |
 | `make_data.py` | Prepares and preprocesses the dataset.        |
 | `train.py`     | Trains the Efficient U-Net model.             |
 | `test.py`      | Runs inference on the test dataset.           |

@@ -1,32 +1,33 @@
 # train.py
+
+import os
+import glob
+import argparse
+from dataclasses import dataclass
+from typing import Dict, Any
+
+from matplotlib import pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset, random_split
-import torchvision.transforms as T
 import torch.nn.functional as F
-from torchvision.utils import save_image
-import os
-from model import EfficientUNet5Down
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import glob
+from torch.utils.data import Dataset, DataLoader, random_split
+import torchvision.transforms as T
+from hyperopt import fmin, tpe, hp, Trials, STATUS_OK
 from PIL import Image
+from tqdm import tqdm
+from model import EfficientUNet5Down
 from scipy import ndimage
-import numpy as np
-from skimage.morphology import skeletonize
 
 # --------------- Config ---------------
 if torch.backends.mps.is_available():
-    DEVICE = "mps"  # Metal GPU on Mac
+    DEVICE = "mps"
 elif torch.cuda.is_available():
     DEVICE = "cuda"
 else:
     DEVICE = "cpu"
 
-EPOCHS = 20
-BATCH_SIZE = 8
-LEARNING_RATE = 1e-4
 SAVE_DIR = "./outputs"
 DATA_DIR = "./data/train/thinning"
 INPUT_SAVE_DIR = os.path.join(SAVE_DIR, "inputs")
@@ -35,6 +36,18 @@ DISTANCE_SAVE_DIR = os.path.join(SAVE_DIR, "pred_distances")
 os.makedirs(INPUT_SAVE_DIR, exist_ok=True)
 os.makedirs(SKELETON_SAVE_DIR, exist_ok=True)
 os.makedirs(DISTANCE_SAVE_DIR, exist_ok=True)
+
+
+# --------------- Data classes ---------------
+@dataclass
+class TrainConfig:
+    batch_size: int = 8
+    learning_rate: float = 1e-4
+    epochs: int = 20
+    alpha: float = 1.0
+    beta: float = 1.0
+    gamma: float = 0.1
+    base_filters: int = 32
 
 
 def plot_losses(train_losses, val_losses):
@@ -51,54 +64,40 @@ def plot_losses(train_losses, val_losses):
     print(f"Loss curve saved to {SAVE_DIR}/loss_curve.png")
 
 
+# --------------- Dataset ---------------
 class ThinningDataset(Dataset):
     def __init__(self, root_dir, transform=None):
-        super().__init__()
         self.image_paths = sorted(glob.glob(os.path.join(root_dir, "image_*.png")))
         self.target_paths = sorted(glob.glob(os.path.join(root_dir, "target_*.png")))
         self.transform = transform
-
-        assert len(self.image_paths) == len(
-            self.target_paths
-        ), "Number of images and targets do not match!"
+        assert len(self.image_paths) == len(self.target_paths), "Mismatch!"
 
     def __len__(self):
         return len(self.image_paths)
 
     def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
-        target_path = self.target_paths[idx]
-
-        image = Image.open(image_path).convert("L")  # grayscale
-        target = Image.open(target_path).convert("L")  # grayscale
+        image = Image.open(self.image_paths[idx]).convert("L")
+        target = Image.open(self.target_paths[idx]).convert("L")
 
         if self.transform:
             image = self.transform(image)
             target = self.transform(target)
 
-        # Binary skeleton
-        skeleton_target = (target > 0.5).float()  # (B, 1, 256, 256)
-
-        # Distance Transform
-        skeleton_np = skeleton_target.squeeze(0).numpy()  # shape (256, 256)
-        inverted = (
-            1.0 - skeleton_np
-        )  # so skeleton pixels (==1) become 0, background (==0) becomes 1
-        distance_map = ndimage.distance_transform_edt(inverted)
-
-        # Normalize distance map to [0,1] for stability
-        distance_map = torch.tensor(distance_map, dtype=torch.float32)
+        skeleton_target = (target > 0.5).float()
+        inverted = 1.0 - skeleton_target.squeeze(0).numpy()
+        distance_map = torch.tensor(
+            ndimage.distance_transform_edt(inverted), dtype=torch.float32
+        )
         distance_map = distance_map / distance_map.max()
 
         return image, skeleton_target.squeeze(0), distance_map
 
 
+# --------------- Dataloaders ---------------
 def get_dataloaders(batch_size, train_ratio=0.8):
     dataset = ThinningDataset(root_dir=DATA_DIR, transform=T.ToTensor())
-
     train_size = int(train_ratio * len(dataset))
     val_size = len(dataset) - train_size
-
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
     train_loader = DataLoader(
@@ -111,90 +110,64 @@ def get_dataloaders(batch_size, train_ratio=0.8):
     return train_loader, val_loader
 
 
-# Loss function
+# --------------- Loss ---------------
 criterion_bce = nn.BCEWithLogitsLoss()
 criterion_mse = nn.MSELoss()
 
 
 def fast_thinning_loss(pred_skeleton_batch, threshold=0.5):
-    # 3x3 convolution kernel to count neighbors
     kernel = torch.ones((1, 1, 3, 3), device=pred_skeleton_batch.device)
-
-    # Apply sigmoid to get probabilities
-    pred_probs = torch.sigmoid(pred_skeleton_batch.unsqueeze(1))  # (B,1,H,W)
-
-    # Threshold to binary
+    pred_probs = torch.sigmoid(pred_skeleton_batch.unsqueeze(1))
     pred_binary = (pred_probs > threshold).float()
-
-    # Convolve to count how many neighbors each pixel has
     neighbor_count = F.conv2d(pred_binary, kernel, padding=1)
-
-    # Ideal skeleton pixel has neighbor count ~2 or fewer (endpoints or thin lines)
     thick_pixels = (neighbor_count > 3).float()
-
-    # We want thick_pixels to be 0 everywhere
-    loss = thick_pixels.mean()
-
-    return loss
+    return thick_pixels.mean()
 
 
-def multitask_loss(
-    pred, skeleton_target, distance_target, alpha=1.0, beta=1.0, gamma=0.1
-):
+def multitask_loss(pred, skeleton_target, distance_target, alpha, beta, gamma):
     pred_skeleton = pred[:, 0, :, :]
     pred_distance = pred[:, 1, :, :]
 
     loss_skeleton = criterion_bce(pred_skeleton, skeleton_target)
     loss_distance = criterion_mse(pred_distance, distance_target)
-    loss_thin = fast_thinning_loss(pred_skeleton)  # Use the fast version here
+    loss_thin = fast_thinning_loss(pred_skeleton)
 
     return alpha * loss_skeleton + beta * loss_distance + gamma * loss_thin
 
 
-# --------------- Main Training Loop ---------------
-def train():
-    # Loaders
-    train_loader, val_loader = get_dataloaders(BATCH_SIZE)
+# --------------- Unified training function ---------------
+def train(config: TrainConfig) -> float:
+    train_loader, val_loader = get_dataloaders(config.batch_size)
 
-    # Model
-    model = EfficientUNet5Down(in_channels=1, out_channels=2).to(DEVICE)
+    model = EfficientUNet5Down(
+        in_channels=1, out_channels=2, base_filters=config.base_filters
+    ).to(DEVICE)
+    optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
 
-    # Optimizer
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-    # Best validation loss tracker
     best_val_loss = float("inf")
 
-    # Track losses for plotting
-    train_losses = []
-    val_losses = []
-
-    # Training
-    for epoch in range(EPOCHS):
+    for epoch in range(config.epochs):
         model.train()
-        loop = tqdm(train_loader, total=len(train_loader))
-        running_train_loss = 0.0
-
-        for inputs, skeleton_targets, distance_targets in loop:
+        for inputs, skeleton_targets, distance_targets in tqdm(
+            train_loader, leave=False
+        ):
             inputs = inputs.to(DEVICE)
             skeleton_targets = skeleton_targets.to(DEVICE)
             distance_targets = distance_targets.to(DEVICE)
 
             optimizer.zero_grad()
             outputs = model(inputs)
-
-            loss = multitask_loss(outputs, skeleton_targets, distance_targets)
+            loss = multitask_loss(
+                outputs,
+                skeleton_targets,
+                distance_targets,
+                alpha=config.alpha,
+                beta=config.beta,
+                gamma=config.gamma,
+            )
             loss.backward()
             optimizer.step()
 
-            running_train_loss += loss.item()
-
-            loop.set_description(f"Epoch [{epoch+1}/{EPOCHS}]")
-            loop.set_postfix(loss=loss.item())
-
-        avg_train_loss = running_train_loss / len(train_loader)
-
-        # Validation
         model.eval()
         running_val_loss = 0.0
         with torch.no_grad():
@@ -204,60 +177,71 @@ def train():
                 distance_targets = distance_targets.to(DEVICE)
 
                 outputs = model(inputs)
-                val_loss = multitask_loss(outputs, skeleton_targets, distance_targets)
+                val_loss = multitask_loss(
+                    outputs,
+                    skeleton_targets,
+                    distance_targets,
+                    alpha=config.alpha,
+                    beta=config.beta,
+                    gamma=config.gamma,
+                )
                 running_val_loss += val_loss.item()
 
         avg_val_loss = running_val_loss / len(val_loader)
+        best_val_loss = min(best_val_loss, avg_val_loss)
 
-        # Record losses
-        train_losses.append(avg_train_loss)
-        val_losses.append(avg_val_loss)
+        print(f"Epoch [{epoch+1}/{config.epochs}] Validation Loss: {avg_val_loss:.6f}")
 
-        print(
-            f"Epoch [{epoch+1}/{EPOCHS}] | Train Loss: {avg_train_loss:.6f} | Val Loss: {avg_val_loss:.6f}"
-        )
-
-        # Save best model
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            best_model_path = os.path.join(SAVE_DIR, "model_best.pth")
-            torch.save(model.state_dict(), best_model_path)
-            print(
-                f"New best model saved at epoch {epoch+1} with Val Loss: {best_val_loss:.6f}"
-            )
-
-        save_prediction(inputs, outputs, epoch)
-
-    # Save final model
-    final_model_path = os.path.join(SAVE_DIR, "model_final.pth")
-    torch.save(model.state_dict(), final_model_path)
-    print(f"Training finished. Final model saved to {final_model_path}")
-
-    # After all epochs — Plot and save loss curves
-    plot_losses(train_losses, val_losses)
+    if not os.environ.get("HYPEROPT", False):
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
+    return best_val_loss
 
 
-def save_prediction(inputs, outputs, epoch):
-    """Save input and prediction images for inspection"""
-    pred_skeleton = torch.sigmoid(outputs[:, 0:1, :, :])  # (B,1,256,256)
-    pred_distance = outputs[:, 1:2, :, :]  # (B,1,256,256)
-
-    save_image(
-        inputs[0],
-        os.path.join(INPUT_SAVE_DIR, f"input_epoch{epoch+1}.png"),
-        normalize=True,
+# --------------- Hyperopt Objective ---------------
+def objective(params: Dict[str, Any]):
+    config = TrainConfig(
+        batch_size=int(params["batch_size"]),
+        learning_rate=params["lr"],
+        epochs=int(params["epochs"]),
+        alpha=params["alpha"],
+        beta=params["beta"],
+        gamma=params["gamma"],
+        base_filters=int(params["base_filters"]),
     )
-    save_image(
-        pred_skeleton[0],
-        os.path.join(SKELETON_SAVE_DIR, f"pred_skeleton_epoch{epoch+1}.png"),
-        normalize=True,
-    )
-    save_image(
-        pred_distance[0],
-        os.path.join(DISTANCE_SAVE_DIR, f"pred_distance_epoch{epoch+1}.png"),
-        normalize=True,
-    )
+    val_loss = train(config)
+    return {"loss": val_loss, "status": STATUS_OK}
 
 
+# --------------- Hyperopt Search Space ---------------
+search_space = {
+    "lr": hp.loguniform("lr", np.log(1e-5), np.log(1e-3)),
+    "batch_size": hp.choice("batch_size", [4, 8, 16]),
+    "alpha": hp.uniform("alpha", 0.5, 2.0),
+    "beta": hp.uniform("beta", 0.5, 2.0),
+    "gamma": hp.uniform("gamma", 0.05, 0.2),
+    "base_filters": hp.choice("base_filters", [16, 32, 64]),
+    "epochs": 10,
+}
+
+# --------------- Main ---------------
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--ablation", action="store_true", help="Run hyperopt ablation study"
+    )
+    args = parser.parse_args()
+
+    if args.ablation:
+        os.environ["HYPEROPT"] = "1"  # used to prevent saving checkpoints during search
+        trials = Trials()
+        best = fmin(
+            fn=objective,
+            space=search_space,
+            algo=tpe.suggest,
+            max_evals=20,
+            trials=trials,
+        )
+        print(f"Best hyperparameters found: {best}")
+    else:
+        config = TrainConfig()
+        train(config)
