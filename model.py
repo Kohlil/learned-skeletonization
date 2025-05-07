@@ -43,29 +43,29 @@ class EfficientUNet5Down(nn.Module):
         self.bottleneck = DoubleConv(base_filters * 16, base_filters * 16)
 
         self.upconv5 = nn.ConvTranspose2d(
-            base_filters * 16, base_filters * 8, kernel_size=2, stride=2
+            base_filters * 16, base_filters * 16, kernel_size=2, stride=2
         )
-        self.up5 = DoubleConv(base_filters * 16, base_filters * 8)
+        self.up5 = DoubleConv(base_filters * 16 + base_filters * 16, base_filters * 8)
 
         self.upconv4 = nn.ConvTranspose2d(
-            base_filters * 8, base_filters * 4, kernel_size=2, stride=2
+            base_filters * 8, base_filters * 8, kernel_size=2, stride=2
         )
-        self.up4 = DoubleConv(base_filters * 8, base_filters * 4)
+        self.up4 = DoubleConv(base_filters * 8 + base_filters * 8, base_filters * 4)
 
         self.upconv3 = nn.ConvTranspose2d(
-            base_filters * 4, base_filters * 2, kernel_size=2, stride=2
+            base_filters * 4, base_filters * 4, kernel_size=2, stride=2
         )
-        self.up3 = DoubleConv(base_filters * 4, base_filters * 2)
+        self.up3 = DoubleConv(base_filters * 4 + base_filters * 4, base_filters * 2)
 
         self.upconv2 = nn.ConvTranspose2d(
-            base_filters * 2, base_filters, kernel_size=2, stride=2
+            base_filters * 2, base_filters * 2, kernel_size=2, stride=2
         )
-        self.up2 = DoubleConv(base_filters * 2, base_filters)
+        self.up2 = DoubleConv(base_filters * 2 + base_filters * 2, base_filters)
 
         self.upconv1 = nn.ConvTranspose2d(
             base_filters, base_filters, kernel_size=2, stride=2
         )
-        self.up1 = DoubleConv(base_filters * 2, base_filters)
+        self.up1 = DoubleConv(base_filters + base_filters, base_filters)
 
         self.final_conv = nn.Conv2d(base_filters, out_channels, kernel_size=1)
 
