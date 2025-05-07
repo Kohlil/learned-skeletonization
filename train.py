@@ -30,9 +30,10 @@ elif torch.cuda.is_available():
     DEVICE = "cuda"
 else:
     DEVICE = "cpu"
+print(f"Using {DEVICE}")
 
-SAVE_DIR = "./outputs"
-DATA_DIR = "./data/train/thinning"
+SAVE_DIR = os.environ.get("SAVE_DIR", "./outputs")
+DATA_DIR = os.environ.get("DATA_DIR", "./data/train/thinning")
 
 
 # --------------- Data classes ---------------
