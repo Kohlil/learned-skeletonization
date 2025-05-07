@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 from scipy.ndimage import convolve
 from scipy.optimize import linear_sum_assignment
-
+from tqdm import tqdm  # <-- Added tqdm
 from train import Config
 
 # --------------- Metrics Functions ---------------
@@ -15,7 +15,8 @@ def compute_test_loss(model, dataloader, loss_fn, device, config: Config):
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
-        for inputs, skeleton_targets, distance_targets in dataloader:
+        loop = tqdm(dataloader, desc="Computing Test Loss", leave=False)
+        for inputs, skeleton_targets, distance_targets in loop:
             inputs = inputs.to(device)
             skeleton_targets = skeleton_targets.to(device)
             distance_targets = distance_targets.to(device)
@@ -31,6 +32,9 @@ def compute_test_loss(model, dataloader, loss_fn, device, config: Config):
             )
             running_loss += loss.item()
 
+            avg_loss = running_loss / (loop.n + 1)
+            loop.set_postfix(test_loss=f"{avg_loss:.6f}")
+
     avg_loss = running_loss / len(dataloader)
     return avg_loss
 
@@ -39,7 +43,8 @@ def compute_distance_mse(model, dataloader, device):
     model.eval()
     total_mse = 0.0
     with torch.no_grad():
-        for inputs, _, distance_targets in dataloader:
+        loop = tqdm(dataloader, desc="Computing Distance MSE", leave=False)
+        for inputs, _, distance_targets in loop:
             inputs = inputs.to(device)
             distance_targets = distance_targets.to(device)
 
@@ -48,6 +53,9 @@ def compute_distance_mse(model, dataloader, device):
 
             mse = F.mse_loss(pred_distance, distance_targets, reduction="mean")
             total_mse += mse.item()
+
+            avg_mse = total_mse / (loop.n + 1)
+            loop.set_postfix(distance_mse=f"{avg_mse:.6f}")
 
     avg_mse = total_mse / len(dataloader)
     return avg_mse
@@ -76,20 +84,14 @@ def match_nodes(pred_nodes, gt_nodes, valence, max_dist=3):
     if len(pred_filtered) == 0:
         return 0.0, 0.0
 
-    # Build distance matrix
     cost_matrix = np.zeros((len(pred_filtered), len(gt_filtered)))
     for i, (px, py) in enumerate(pred_filtered):
         for j, (gx, gy) in enumerate(gt_filtered):
             cost_matrix[i, j] = np.sqrt((px - gx) ** 2 + (py - gy) ** 2)
 
-    # Solve optimal bipartite assignment
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-    # Count matches within max_dist
-    matches = 0
-    for r, c in zip(row_ind, col_ind):
-        if cost_matrix[r, c] <= max_dist:
-            matches += 1
+    matches = sum(cost_matrix[r, c] <= max_dist for r, c in zip(row_ind, col_ind))
 
     precision = matches / len(pred_filtered)
     recall = matches / len(gt_filtered)
@@ -103,7 +105,8 @@ def compute_node_precision_recall(model, dataloader, device):
     total_recall = {1: [], 2: [], 3: [], 4: []}
 
     with torch.no_grad():
-        for inputs, skeleton_targets, _ in dataloader:
+        loop = tqdm(dataloader, desc="Computing Node Precision/Recall", leave=False)
+        for inputs, skeleton_targets, _ in loop:
             inputs = inputs.to(device)
             outputs = model(inputs)
             pred_skeleton = torch.sigmoid(outputs[:, 0, :, :])
@@ -133,7 +136,8 @@ def compute_iou_and_dice(model, dataloader, device):
     total_dice = 0.0
 
     with torch.no_grad():
-        for inputs, skeleton_targets, _ in dataloader:
+        loop = tqdm(dataloader, desc="Computing IoU/Dice", leave=False)
+        for inputs, skeleton_targets, _ in loop:
             inputs = inputs.to(device)
             skeleton_targets = skeleton_targets.to(device)
 

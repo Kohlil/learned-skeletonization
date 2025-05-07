@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+from tqdm import tqdm
 from torchvision.utils import save_image
 from model import EfficientUNet5Down
 from train import ThinningDataset, multitask_loss, Config
@@ -56,9 +57,8 @@ def save_test_predictions(model, dataloader, device):
     model.eval()
 
     with torch.no_grad():
-        for batch_idx, (inputs, skeleton_targets, distance_targets) in enumerate(
-            dataloader
-        ):
+        loop = tqdm(dataloader, desc="Saving Predictions", leave=True)
+        for batch_idx, (inputs, skeleton_targets, distance_targets) in enumerate(loop):
             inputs = inputs.to(device)
             outputs = model(inputs)
 
