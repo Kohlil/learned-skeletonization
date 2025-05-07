@@ -234,7 +234,9 @@ def train(config: Config) -> float:
             )
 
         # Save best model so far
-        if not is_hyperopt and avg_val_loss < best_val_loss:
+        if is_hyperopt:
+            continue
+        elif avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             epochs_without_improvement = 0
             torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
