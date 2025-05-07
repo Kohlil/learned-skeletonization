@@ -156,6 +156,9 @@ def multitask_loss(pred, skeleton_target, distance_target, alpha, beta, gamma):
 
 # --------------- Unified training function ---------------
 def train(config: TrainConfig) -> float:
+    train_losses = []
+    val_losses = []
+
     train_loader, val_loader = get_dataloaders(config.batch_size)
 
     model = EfficientUNet5Down(
@@ -219,6 +222,8 @@ def train(config: TrainConfig) -> float:
                 val_loop.set_postfix(val_loss=f"{avg_val_loss_so_far:.4f}")
 
         avg_val_loss = running_val_loss / len(val_loader)
+        train_losses.append(avg_train_loss)
+        val_losses.append(avg_val_loss)
 
         if not is_hyperopt:
             save_predictions(inputs, outputs, epoch + 1)
@@ -236,6 +241,17 @@ def train(config: TrainConfig) -> float:
 
     if not is_hyperopt:
         torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_final.pth"))
+        plt.figure(figsize=(8, 6))
+        plt.plot(train_losses, label="Train Loss")
+        plt.plot(val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training vs Validation Loss")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig(os.path.join(SAVE_DIR, "loss_curve.png"))
+        plt.close()
+        print(f"Saved training curve to {SAVE_DIR}/loss_curve.png")
     return best_val_loss
 
 

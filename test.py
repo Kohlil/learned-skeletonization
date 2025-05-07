@@ -7,9 +7,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from torchvision.utils import save_image
-
 from model import EfficientUNet5Down
-from train import ThinningDataset, multitask_loss
+from train import ThinningDataset, multitask_loss, TrainConfig
 from evaluate import (
     compute_test_loss,
     compute_distance_mse,
@@ -18,8 +17,14 @@ from evaluate import (
 )
 
 # --------------- Config ---------------
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 8
+if torch.backends.mps.is_available():
+    DEVICE = "mps"
+elif torch.cuda.is_available():
+    DEVICE = "cuda"
+else:
+    DEVICE = "cpu"
+
+BATCH_SIZE = TrainConfig().batch_size  # match your config system
 DATA_DIR = "./data/test/thinning"
 
 # Output folders
@@ -45,6 +50,7 @@ def get_test_loader(batch_size):
     return test_loader
 
 
+# --------------- Save Predictions ---------------
 def save_test_predictions(model, dataloader, device):
     model.eval()
 
@@ -55,8 +61,8 @@ def save_test_predictions(model, dataloader, device):
             inputs = inputs.to(device)
             outputs = model(inputs)
 
-            pred_skeleton = torch.sigmoid(outputs[:, 0:1, :, :])  # (B,1,256,256)
-            pred_distance = outputs[:, 1:2, :, :]  # (B,1,256,256)
+            pred_skeleton = torch.sigmoid(outputs[:, 0:1, :, :])
+            pred_distance = outputs[:, 1:2, :, :]
 
             pred_skeleton_binary = (pred_skeleton > 0.5).float()
 
@@ -80,6 +86,7 @@ def save_test_predictions(model, dataloader, device):
                 )
 
 
+# --------------- Plots (Node PR + Full Metrics) ---------------
 def plot_node_precision_recall(
     precision_dict,
     recall_dict,
@@ -89,14 +96,13 @@ def plot_node_precision_recall(
     precision = [precision_dict[v] for v in valences]
     recall = [recall_dict[v] for v in valences]
 
-    x = np.arange(len(valences))  # the label locations
-    width = 0.35  # the width of the bars
+    x = np.arange(len(valences))
+    width = 0.35
 
     fig, ax = plt.subplots(figsize=(8, 6))
     rects1 = ax.bar(x - width / 2, precision, width, label="Precision")
     rects2 = ax.bar(x + width / 2, recall, width, label="Recall")
 
-    # Add labels and title
     ax.set_ylabel("Score")
     ax.set_xlabel("Node Valence")
     ax.set_title("Precision and Recall by Node Valence")
@@ -106,35 +112,27 @@ def plot_node_precision_recall(
     ax.legend()
     ax.grid(axis="y")
 
-    # Annotate bars
-    def autolabel(rects):
-        for rect in rects:
-            height = rect.get_height()
-            ax.annotate(
-                f"{height:.2f}",
-                xy=(rect.get_x() + rect.get_width() / 2, height),
-                xytext=(0, 3),  # 3 points vertical offset
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-            )
-
-    autolabel(rects1)
-    autolabel(rects2)
+    for rect in rects1 + rects2:
+        height = rect.get_height()
+        ax.annotate(
+            f"{height:.2f}",
+            xy=(rect.get_x() + rect.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+        )
 
     fig.tight_layout()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path)
     plt.close()
-    print(f"Saved Precision/Recall plot to {save_path}")
-
-
-import matplotlib.pyplot as plt
+    print(f"Saved Node PR plot to {save_path}")
 
 
 def plot_full_test_metrics(
-    precision_dict,
-    recall_dict,
+    precision,
+    recall,
     iou,
     dice,
     test_loss,
@@ -142,17 +140,16 @@ def plot_full_test_metrics(
     save_path="./outputs/test_predictions/full_test_metrics.png",
 ):
     valences = [1, 2, 3, 4]
-    precision = [precision_dict[v] for v in valences]
-    recall = [recall_dict[v] for v in valences]
+    precision_vals = [precision[v] for v in valences]
+    recall_vals = [recall[v] for v in valences]
 
     fig, axs = plt.subplots(1, 2, figsize=(14, 6))
 
-    # --- Left Plot: Precision & Recall ---
     x = np.arange(len(valences))
     width = 0.35
 
-    rects1 = axs[0].bar(x - width / 2, precision, width, label="Precision")
-    rects2 = axs[0].bar(x + width / 2, recall, width, label="Recall")
+    rects1 = axs[0].bar(x - width / 2, precision_vals, width, label="Precision")
+    rects2 = axs[0].bar(x + width / 2, recall_vals, width, label="Recall")
 
     axs[0].set_ylabel("Score")
     axs[0].set_xlabel("Node Valence")
@@ -163,46 +160,38 @@ def plot_full_test_metrics(
     axs[0].legend()
     axs[0].grid(axis="y")
 
-    # Annotate bars
-    def autolabel(rects, ax):
-        for rect in rects:
-            height = rect.get_height()
-            ax.annotate(
-                f"{height:.2f}",
-                xy=(rect.get_x() + rect.get_width() / 2, height),
-                xytext=(0, 3),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-            )
+    for rect in rects1 + rects2:
+        height = rect.get_height()
+        axs[0].annotate(
+            f"{height:.2f}",
+            xy=(rect.get_x() + rect.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+        )
 
-    autolabel(rects1, axs[0])
-    autolabel(rects2, axs[0])
-
-    # --- Right Plot: Test Summary Text ---
     axs[1].axis("off")
     metrics_text = (
         f"Test Loss: {test_loss:.4f}\n"
         f"Distance MSE: {distance_mse:.4f}\n"
         f"IoU: {iou:.4f}\n"
-        f"Dice Coefficient: {dice:.4f}\n"
+        f"Dice: {dice:.4f}"
     )
     axs[1].text(
         0.5,
         0.5,
         metrics_text,
-        fontsize=16,
         ha="center",
         va="center",
+        fontsize=16,
         fontfamily="monospace",
     )
 
-    # Save figure
     fig.tight_layout()
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
     plt.savefig(save_path)
     plt.close()
-    print(f"Saved full test metrics plot to {save_path}")
+    print(f"Saved Full Test Metrics plot to {save_path}")
 
 
 # --------------- Main Testing ---------------
@@ -234,7 +223,7 @@ if __name__ == "__main__":
     print(f"IoU: {iou:.3f}")
     print(f"Dice Coefficient: {dice:.3f}")
 
-    # Save all test predictions
+    # Save predictions
     save_test_predictions(model, test_loader, DEVICE)
 
     print(f"Saved all test predictions to {SAVE_DIR}/")
