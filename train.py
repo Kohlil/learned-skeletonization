@@ -1,5 +1,6 @@
 # train.py
 
+from functools import partial
 import os
 import glob
 import argparse
@@ -19,6 +20,8 @@ from PIL import Image
 from tqdm import tqdm
 from model import EfficientUNet5Down
 from scipy import ndimage
+from torchvision.utils import save_image
+import pandas as pd
 
 # --------------- Config ---------------
 if torch.backends.mps.is_available():
@@ -30,17 +33,12 @@ else:
 
 SAVE_DIR = "./outputs"
 DATA_DIR = "./data/train/thinning"
-INPUT_SAVE_DIR = os.path.join(SAVE_DIR, "inputs")
-SKELETON_SAVE_DIR = os.path.join(SAVE_DIR, "pred_skeletons")
-DISTANCE_SAVE_DIR = os.path.join(SAVE_DIR, "pred_distances")
-os.makedirs(INPUT_SAVE_DIR, exist_ok=True)
-os.makedirs(SKELETON_SAVE_DIR, exist_ok=True)
-os.makedirs(DISTANCE_SAVE_DIR, exist_ok=True)
 
 
 # --------------- Data classes ---------------
 @dataclass
 class TrainConfig:
+    name: str = "default"
     batch_size: int = 8
     learning_rate: float = 1e-4
     epochs: int = 20
@@ -62,6 +60,27 @@ def plot_losses(train_losses, val_losses):
     plt.savefig(os.path.join(SAVE_DIR, "loss_curve.png"))
     plt.close()
     print(f"Loss curve saved to {SAVE_DIR}/loss_curve.png")
+
+
+def save_predictions(inputs, outputs, epoch, save_dir=SAVE_DIR):
+    os.makedirs(os.path.join(save_dir, f"epoch{epoch}"), exist_ok=True)
+
+    pred_skeleton = torch.sigmoid(outputs[:, 0:1, :, :])  # (B,1,256,256)
+    pred_distance = outputs[:, 1:2, :, :]  # (B,1,256,256)
+
+    save_image(
+        inputs[0], os.path.join(save_dir, f"epoch{epoch}", "input.png"), normalize=True
+    )
+    save_image(
+        pred_skeleton[0],
+        os.path.join(save_dir, f"epoch{epoch}", "pred_skeleton.png"),
+        normalize=True,
+    )
+    save_image(
+        pred_distance[0],
+        os.path.join(save_dir, f"epoch{epoch}", "pred_distance.png"),
+        normalize=True,
+    )
 
 
 # --------------- Dataset ---------------
@@ -145,12 +164,13 @@ def train(config: TrainConfig) -> float:
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
 
     best_val_loss = float("inf")
+    is_hyperopt = os.environ.get("HYPEROPT", "0") == "1"
 
     for epoch in range(config.epochs):
         model.train()
-        for inputs, skeleton_targets, distance_targets in tqdm(
-            train_loader, leave=False
-        ):
+        running_train_loss = 0.0
+        loop = tqdm(train_loader, leave=False, disable=is_hyperopt)
+        for inputs, skeleton_targets, distance_targets in loop:
             inputs = inputs.to(DEVICE)
             skeleton_targets = skeleton_targets.to(DEVICE)
             distance_targets = distance_targets.to(DEVICE)
@@ -168,10 +188,18 @@ def train(config: TrainConfig) -> float:
             loss.backward()
             optimizer.step()
 
+            running_train_loss += loss.item()
+            avg_loss_so_far = running_train_loss / (loop.n + 1)
+            loop.set_description(f"Epoch [{epoch+1}/{config.epochs}]")
+            loop.set_postfix(train_loss=f"{avg_loss_so_far:.4f}")
+
+        avg_train_loss = running_train_loss / len(train_loader)
+
         model.eval()
         running_val_loss = 0.0
         with torch.no_grad():
-            for inputs, skeleton_targets, distance_targets in val_loader:
+            val_loop = tqdm(val_loader, leave=False, disable=is_hyperopt)
+            for inputs, skeleton_targets, distance_targets in val_loop:
                 inputs = inputs.to(DEVICE)
                 skeleton_targets = skeleton_targets.to(DEVICE)
                 distance_targets = distance_targets.to(DEVICE)
@@ -186,33 +214,51 @@ def train(config: TrainConfig) -> float:
                     gamma=config.gamma,
                 )
                 running_val_loss += val_loss.item()
+                avg_val_loss_so_far = running_val_loss / (val_loop.n + 1)
+                val_loop.set_description(f"Val [{epoch+1}/{config.epochs}]")
+                val_loop.set_postfix(val_loss=f"{avg_val_loss_so_far:.4f}")
 
         avg_val_loss = running_val_loss / len(val_loader)
-        best_val_loss = min(best_val_loss, avg_val_loss)
 
-        print(f"Epoch [{epoch+1}/{config.epochs}] Validation Loss: {avg_val_loss:.6f}")
+        if not is_hyperopt:
+            save_predictions(inputs, outputs, epoch + 1)
+            print(
+                f"Epoch [{epoch+1}/{config.epochs}] - Train Loss: {avg_train_loss:.6f} - Val Loss: {avg_val_loss:.6f}"
+            )
 
-    if not os.environ.get("HYPEROPT", False):
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
+        # Save best model so far
+        if not is_hyperopt and avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
+            print(
+                f"New best model saved at epoch {epoch+1} with Val Loss: {avg_val_loss:.6f}"
+            )
+
+    if not is_hyperopt:
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_final.pth"))
     return best_val_loss
 
 
-# --------------- Hyperopt Objective ---------------
-def objective(params: Dict[str, Any]):
+# --------------- Hyperopt ---------------
+def objective(params: Dict[str, Any], trials_obj: Trials):
+    trial_id = len(trials_obj.trials)
     config = TrainConfig(
-        batch_size=int(params["batch_size"]),
+        name=f"hyperopt_trial_{trial_id}",
         learning_rate=params["lr"],
-        epochs=int(params["epochs"]),
+        batch_size=int(params["batch_size"]),
         alpha=params["alpha"],
         beta=params["beta"],
         gamma=params["gamma"],
         base_filters=int(params["base_filters"]),
+        epochs=10,  # or however many you want
     )
     val_loss = train(config)
+
+    print(f"[Hyperopt Trial {trial_id}/{trials_obj.max_trials}] Loss = {val_loss:.6f}")
+
     return {"loss": val_loss, "status": STATUS_OK}
 
 
-# --------------- Hyperopt Search Space ---------------
 search_space = {
     "lr": hp.loguniform("lr", np.log(1e-5), np.log(1e-3)),
     "batch_size": hp.choice("batch_size", [4, 8, 16]),
@@ -222,6 +268,46 @@ search_space = {
     "base_filters": hp.choice("base_filters", [16, 32, 64]),
     "epochs": 10,
 }
+
+
+# Optional: decode choice indices back into real values
+def decode_choices(df):
+    if "batch_size" in df.columns:
+        batch_map = {0: 4, 1: 8, 2: 16}
+        df["batch_size"] = df["batch_size"].map(batch_map)
+
+    if "base_filters" in df.columns:
+        filters_map = {0: 16, 1: 32, 2: 64}
+        df["base_filters"] = df["base_filters"].map(filters_map)
+
+    return df
+
+
+def print_summary(trials: Trials):
+    results = []
+    for trial in trials.trials:
+        result = {
+            "trial": trial["tid"],
+            "loss": trial["result"]["loss"],
+        }
+        result.update(trial["misc"]["vals"])  # Add hyperparameter values
+        results.append(result)
+
+    # Turn into DataFrame
+    df = pd.DataFrame(results)
+    df = decode_choices(df)
+
+    # Sort by best loss
+    df = df.sort_values(by="loss")
+
+    # Print table
+    print("\nHyperopt Results Summary:")
+    print(df)
+
+    # Save table to CSV if you want
+    df.to_csv(os.path.join(SAVE_DIR, "hyperopt_summary.csv"), index=False)
+    print(f"Saved summary table to {SAVE_DIR}/hyperopt_summary.csv")
+
 
 # --------------- Main ---------------
 if __name__ == "__main__":
@@ -235,13 +321,15 @@ if __name__ == "__main__":
         os.environ["HYPEROPT"] = "1"  # used to prevent saving checkpoints during search
         trials = Trials()
         best = fmin(
-            fn=objective,
+            fn=partial(objective, trials_obj=trials),
             space=search_space,
             algo=tpe.suggest,
             max_evals=20,
             trials=trials,
         )
+        print_summary(trials)
         print(f"Best hyperparameters found: {best}")
+
     else:
         config = TrainConfig()
         train(config)
