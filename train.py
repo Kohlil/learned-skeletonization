@@ -41,7 +41,7 @@ class Config:
     name: str = "default"
     batch_size: int = 8
     learning_rate: float = 1e-4
-    epochs: int = 20
+    epochs: int = 100
     alpha: float = 1.0
     beta: float = 1.0
     gamma: float = 0.1
@@ -167,6 +167,8 @@ def train(config: Config) -> float:
     optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
 
     best_val_loss = float("inf")
+    epochs_without_improvement = 0
+    patience = 5
     is_hyperopt = os.environ.get("HYPEROPT", "0") == "1"
 
     for epoch in range(config.epochs):
@@ -234,10 +236,21 @@ def train(config: Config) -> float:
         # Save best model so far
         if not is_hyperopt and avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
             print(
                 f"New best model saved at epoch {epoch+1} with Val Loss: {avg_val_loss:.6f}"
             )
+        else:
+            epochs_without_improvement += 1
+            print(f"No improvement for {epochs_without_improvement} epochs.")
+
+        # Early stopping
+        if epochs_without_improvement >= patience:
+            print(
+                f"Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)"
+            )
+            break
 
     if not is_hyperopt:
         torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_final.pth"))

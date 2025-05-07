@@ -17,7 +17,7 @@ CONFIGS = {
     "train": {
         "place": "Beavercreek, Ohio, USA",
         "image_size": (256, 256),
-        "n_samples": 1000,
+        "n_samples": 2000,
         "network_type": "drive",
         "data_dir": "data/train/thinning",
     },
