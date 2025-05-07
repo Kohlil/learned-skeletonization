@@ -297,7 +297,7 @@ search_space = {
     "beta": hp.uniform("beta", 0.5, 2.0),
     "gamma": hp.uniform("gamma", 0.05, 0.2),
     "base_filters": hp.choice("base_filters", [16, 32, 64]),
-    "epochs": 10,
+    "epochs": 20,
 }
 
 
