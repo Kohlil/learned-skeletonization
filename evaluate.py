@@ -6,10 +6,12 @@ import numpy as np
 from scipy.ndimage import convolve
 from scipy.optimize import linear_sum_assignment
 
+from train import Config
+
 # --------------- Metrics Functions ---------------
 
 
-def compute_test_loss(model, dataloader, loss_fn, device):
+def compute_test_loss(model, dataloader, loss_fn, device, config: Config):
     model.eval()
     running_loss = 0.0
     with torch.no_grad():
@@ -19,7 +21,14 @@ def compute_test_loss(model, dataloader, loss_fn, device):
             distance_targets = distance_targets.to(device)
 
             outputs = model(inputs)
-            loss = loss_fn(outputs, skeleton_targets, distance_targets)
+            loss = loss_fn(
+                outputs,
+                skeleton_targets,
+                distance_targets,
+                config.alpha,
+                config.beta,
+                config.gamma,
+            )
             running_loss += loss.item()
 
     avg_loss = running_loss / len(dataloader)

@@ -8,7 +8,7 @@ import numpy as np
 import os
 from torchvision.utils import save_image
 from model import EfficientUNet5Down
-from train import ThinningDataset, multitask_loss, TrainConfig
+from train import ThinningDataset, multitask_loss, Config
 from evaluate import (
     compute_test_loss,
     compute_distance_mse,
@@ -24,7 +24,8 @@ elif torch.cuda.is_available():
 else:
     DEVICE = "cpu"
 
-BATCH_SIZE = TrainConfig().batch_size  # match your config system
+CONFIG = Config()
+BATCH_SIZE = CONFIG.batch_size  # match your config system
 DATA_DIR = "./data/test/thinning"
 
 # Output folders
@@ -205,7 +206,7 @@ if __name__ == "__main__":
     test_loader = get_test_loader(BATCH_SIZE)
 
     # Evaluate
-    test_loss = compute_test_loss(model, test_loader, multitask_loss, DEVICE)
+    test_loss = compute_test_loss(model, test_loader, multitask_loss, DEVICE, CONFIG)
     distance_mse = compute_distance_mse(model, test_loader, DEVICE)
     precision, recall = compute_node_precision_recall(model, test_loader, DEVICE)
     iou, dice = compute_iou_and_dice(model, test_loader, DEVICE)

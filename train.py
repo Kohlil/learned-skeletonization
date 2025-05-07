@@ -37,7 +37,7 @@ DATA_DIR = "./data/train/thinning"
 
 # --------------- Data classes ---------------
 @dataclass
-class TrainConfig:
+class Config:
     name: str = "default"
     batch_size: int = 8
     learning_rate: float = 1e-4
@@ -155,7 +155,7 @@ def multitask_loss(pred, skeleton_target, distance_target, alpha, beta, gamma):
 
 
 # --------------- Unified training function ---------------
-def train(config: TrainConfig) -> float:
+def train(config: Config) -> float:
     train_losses = []
     val_losses = []
 
@@ -258,7 +258,7 @@ def train(config: TrainConfig) -> float:
 # --------------- Hyperopt ---------------
 def objective(params: Dict[str, Any], trials_obj: Trials):
     trial_id = len(trials_obj.trials)
-    config = TrainConfig(
+    config = Config(
         name=f"hyperopt_trial_{trial_id}",
         learning_rate=params["lr"],
         batch_size=int(params["batch_size"]),
@@ -347,5 +347,5 @@ if __name__ == "__main__":
         print(f"Best hyperparameters found: {best}")
 
     else:
-        config = TrainConfig()
+        config = Config()
         train(config)
