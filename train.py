@@ -271,7 +271,7 @@ def train(config: Config) -> float:
 
 
 # --------------- Hyperopt ---------------
-def objective(params: Dict[str, Any], trials_obj: Trials):
+def objective(params: Dict[str, Any], trials_obj: Trials, max_evals: int):
     trial_id = len(trials_obj.trials)
     config = Config(
         name=f"hyperopt_trial_{trial_id}",
@@ -285,7 +285,7 @@ def objective(params: Dict[str, Any], trials_obj: Trials):
     )
     val_loss = train(config)
 
-    print(f"[Hyperopt Trial {trial_id}/{trials_obj.max_trials}] Loss = {val_loss:.6f}")
+    print(f"[Hyperopt Trial {trial_id}/{max_evals}] Loss = {val_loss:.6f}")
 
     return {"loss": val_loss, "status": STATUS_OK}
 
@@ -350,12 +350,13 @@ if __name__ == "__main__":
 
     if args.ablation:
         os.environ["HYPEROPT"] = "1"  # used to prevent saving checkpoints during search
+        max_evals = 100
         trials = Trials()
         best = fmin(
-            fn=partial(objective, trials_obj=trials),
+            fn=partial(objective, trials_obj=trials, max_evals=max_evals),
             space=search_space,
             algo=tpe.suggest,
-            max_evals=20,
+            max_evals=max_evals,
             trials=trials,
         )
         print_summary(trials)
