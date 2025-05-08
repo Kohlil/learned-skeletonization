@@ -171,7 +171,7 @@ def train(config: Config) -> float:
     optimizer = optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.75)
 
     best_val_loss = float("inf")
     epochs_without_improvement = 0
