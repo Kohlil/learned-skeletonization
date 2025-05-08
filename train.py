@@ -5,6 +5,7 @@ import os
 import glob
 import argparse
 from dataclasses import dataclass
+import pickle
 from typing import Dict, Any
 
 from matplotlib import pyplot as plt
@@ -15,7 +16,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.transforms as T
-from hyperopt import fmin, tpe, hp, Trials, STATUS_OK
+from hyperopt import fmin, tpe, hp, Trials, STATUS_OK, STATUS_FAIL
 from PIL import Image
 from tqdm import tqdm
 from model import EfficientUNet5Down
@@ -30,7 +31,7 @@ elif torch.cuda.is_available():
     DEVICE = "cuda"
 else:
     DEVICE = "cpu"
-print(f"Using {DEVICE}")
+
 
 SAVE_DIR = os.environ.get("SAVE_DIR", "./outputs")
 DATA_DIR = os.environ.get("DATA_DIR", "./data/train/thinning")
@@ -169,8 +170,8 @@ def train(config: Config) -> float:
 
     best_val_loss = float("inf")
     epochs_without_improvement = 0
-    patience = 5
     is_hyperopt = os.environ.get("HYPEROPT", "0") == "1"
+    patience = 3 if is_hyperopt else 5
 
     for epoch in range(config.epochs):
         model.train()
@@ -236,17 +237,17 @@ def train(config: Config) -> float:
             )
 
         # Save best model so far
-        if is_hyperopt:
-            continue
-        elif avg_val_loss == best_val_loss:
+        if avg_val_loss == best_val_loss:
             epochs_without_improvement = 0
-            torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
-            print(
-                f"New best model saved at epoch {epoch+1} with Val Loss: {avg_val_loss:.6f}"
-            )
+            if not is_hyperopt:
+                torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_best.pth"))
+                print(
+                    f"New best model saved at epoch {epoch+1} with Val Loss: {avg_val_loss:.6f}"
+                )
         else:
             epochs_without_improvement += 1
-            print(f"No improvement for {epochs_without_improvement} epochs.")
+            if not is_hyperopt:
+                print(f"No improvement for {epochs_without_improvement} epochs.")
 
         # Early stopping
         if epochs_without_improvement >= patience:
@@ -273,22 +274,29 @@ def train(config: Config) -> float:
 
 # --------------- Hyperopt ---------------
 def objective(params: Dict[str, Any], trials_obj: Trials, max_evals: int):
-    trial_id = len(trials_obj.trials)
-    config = Config(
-        name=f"hyperopt_trial_{trial_id}",
-        learning_rate=params["lr"],
-        batch_size=int(params["batch_size"]),
-        alpha=params["alpha"],
-        beta=params["beta"],
-        gamma=params["gamma"],
-        base_filters=int(params["base_filters"]),
-        epochs=30,
-    )
-    val_loss = train(config)
+    try:
+        trial_id = len(trials_obj.trials)
+        config = Config(
+            name=f"hyperopt_trial_{trial_id}",
+            learning_rate=params["lr"],
+            batch_size=int(params["batch_size"]),
+            alpha=params["alpha"],
+            beta=params["beta"],
+            gamma=params["gamma"],
+            base_filters=int(params["base_filters"]),
+            epochs=1,
+        )
+        val_loss = train(config)
 
-    print(f"[Hyperopt Trial {trial_id}/{max_evals}] Loss = {val_loss:.6f}")
+        progress = f"Trial {trial_id}: params={params}, val_loss={val_loss:.6f}\n"
+        with open(os.path.join(SAVE_DIR, "live_trials_log.txt"), "a") as f:
+            f.write(progress)
+        print(progress)
 
-    return {"loss": val_loss, "status": STATUS_OK}
+        return {"loss": val_loss, "status": STATUS_OK}
+    except Exception as e:
+        print(f"Trial failed with exception: {e}")
+        return {"loss": np.inf, "status": STATUS_FAIL}
 
 
 search_space = {
@@ -301,15 +309,16 @@ search_space = {
 }
 
 
-# Optional: decode choice indices back into real values
 def decode_choices(df):
+    # No need to modify these lines
+    batch_map = {0: 4, 1: 8, 2: 16}
+    base_filters_map = {0: 16, 1: 32, 2: 64}
+
     if "batch_size" in df.columns:
-        batch_map = {0: 4, 1: 8, 2: 16}
         df["batch_size"] = df["batch_size"].map(batch_map)
 
     if "base_filters" in df.columns:
-        filters_map = {0: 16, 1: 32, 2: 64}
-        df["base_filters"] = df["base_filters"].map(filters_map)
+        df["base_filters"] = df["base_filters"].map(base_filters_map)
 
     return df
 
@@ -317,31 +326,43 @@ def decode_choices(df):
 def print_summary(trials: Trials):
     results = []
     for trial in trials.trials:
+        flat_params = {
+            k: v[0] if isinstance(v, list) else v
+            for k, v in trial["misc"]["vals"].items()
+        }
         result = {
             "trial": trial["tid"],
             "loss": trial["result"]["loss"],
+            **flat_params,
         }
-        result.update(trial["misc"]["vals"])  # Add hyperparameter values
         results.append(result)
 
-    # Turn into DataFrame
     df = pd.DataFrame(results)
     df = decode_choices(df)
 
-    # Sort by best loss
     df = df.sort_values(by="loss")
 
-    # Print table
     print("\nHyperopt Results Summary:")
     print(df)
 
-    # Save table to CSV if you want
     df.to_csv(os.path.join(SAVE_DIR, "hyperopt_summary.csv"), index=False)
     print(f"Saved summary table to {SAVE_DIR}/hyperopt_summary.csv")
 
 
+def save_trials(trials, filename):
+    with open(filename, "wb") as f:
+        pickle.dump(trials, f)
+
+
+def load_trials(filename):
+    with open(filename, "rb") as f:
+        return pickle.load(f)
+
+
 # --------------- Main ---------------
 if __name__ == "__main__":
+    print(f"Using {DEVICE}")
+    os.makedirs(SAVE_DIR, exist_ok=True)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--ablation", action="store_true", help="Run hyperopt ablation study"
@@ -349,19 +370,40 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.ablation:
-        os.environ["HYPEROPT"] = "1"  # used to prevent saving checkpoints during search
-        max_evals = 30
-        trials = Trials()
+        os.environ["HYPEROPT"] = "1"  # prevent saving full checkpoints
+        max_evals = 2
+
+        trials_path = os.path.join(SAVE_DIR, "hyperopt_trials.pkl")
+        if os.path.exists(trials_path):
+            print("Found saved trials. Resuming from checkpoint...")
+            trials = load_trials(trials_path)
+            successful_trials = [
+                t for t in trials.trials if t["result"]["status"] == STATUS_OK
+            ]
+            if len(successful_trials) == 0:
+                print("Warning: All previous trials failed. Starting new search.")
+                trials = Trials()
+            remaining_evals = max_evals - len(successful_trials)
+            if remaining_evals <= 0:
+                print("All trials already completed.")
+                print_summary(trials)
+                exit()
+        else:
+            print("No saved trials found. Starting new ablation study...")
+            trials = Trials()
+            remaining_evals = max_evals
+
         best = fmin(
             fn=partial(objective, trials_obj=trials, max_evals=max_evals),
             space=search_space,
             algo=tpe.suggest,
-            max_evals=max_evals,
+            max_evals=remaining_evals,
             trials=trials,
         )
+
+        save_trials(trials, trials_path)  # Save after completion
         print_summary(trials)
         print(f"Best hyperparameters found: {best}")
-
     else:
         config = Config()
         train(config)
