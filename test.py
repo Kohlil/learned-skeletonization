@@ -30,7 +30,7 @@ BATCH_SIZE = CONFIG.batch_size  # match your config system
 DATA_DIR = "./data/test/thinning"
 
 # Output folders
-SAVE_DIR = "./outputs/test_predictions"
+SAVE_DIR = os.environ.get("SAVE_DIR", "./outputs/test_predictions")
 INPUT_SAVE_DIR = os.path.join(SAVE_DIR, "inputs")
 SKELETON_SAVE_DIR = os.path.join(SAVE_DIR, "pred_skeletons")
 DISTANCE_SAVE_DIR = os.path.join(SAVE_DIR, "pred_distances")
