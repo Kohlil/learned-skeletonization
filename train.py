@@ -43,6 +43,7 @@ class Config:
     name: str = "default"
     batch_size: int = 8
     learning_rate: float = 1e-4
+    weight_decay: float = 1e-5
     epochs: int = 100
     alpha: float = 1.0
     beta: float = 1.0
@@ -166,7 +167,9 @@ def train(config: Config) -> float:
     model = EfficientUNet5Down(
         in_channels=1, out_channels=2, base_filters=config.base_filters
     ).to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=config.learning_rate)
+    optimizer = optim.Adam(
+        model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
+    )
 
     best_val_loss = float("inf")
     epochs_without_improvement = 0
@@ -306,6 +309,7 @@ search_space = {
     "beta": hp.uniform("beta", 0.5, 2.0),
     "gamma": hp.uniform("gamma", 0.05, 0.2),
     "base_filters": hp.choice("base_filters", [16, 32, 64]),
+    "weight_decay": hp.loguniform("weight_decay", np.log(1e-6), np.log(1e-3)),
 }
 
 
