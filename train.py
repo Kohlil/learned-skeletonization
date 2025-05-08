@@ -33,7 +33,8 @@ else:
     DEVICE = "cpu"
 
 
-SAVE_DIR = os.environ.get("SAVE_DIR", "./outputs")
+SAVE_DIR = os.environ.get("SAVE_DIR", "./save")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "./outputs")
 DATA_DIR = os.environ.get("DATA_DIR", "./data/train/thinning")
 
 
@@ -65,7 +66,7 @@ def plot_losses(train_losses, val_losses):
     print(f"Loss curve saved to {SAVE_DIR}/loss_curve.png")
 
 
-def save_predictions(inputs, outputs, epoch, save_dir=SAVE_DIR):
+def save_predictions(inputs, outputs, epoch, save_dir=OUTPUT_DIR):
     os.makedirs(os.path.join(save_dir, f"epoch{epoch}"), exist_ok=True)
 
     pred_skeleton = torch.sigmoid(outputs[:, 0:1, :, :])  # (B,1,256,256)
@@ -383,6 +384,7 @@ saved_configs = {
 if __name__ == "__main__":
     print(f"Using {DEVICE}")
     os.makedirs(SAVE_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--ablation", action="store_true", help="Run hyperopt ablation study"
