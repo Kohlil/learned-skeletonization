@@ -9,7 +9,7 @@ import os
 from tqdm import tqdm
 from torchvision.utils import save_image
 from model import EfficientUNet5Down
-from train import ThinningDataset, multitask_loss, Config
+from train import ThinningDataset, multitask_loss, Config, saved_configs
 from evaluate import (
     compute_test_loss,
     compute_distance_mse,
@@ -198,7 +198,10 @@ def plot_full_test_metrics(
 # --------------- Main Testing ---------------
 if __name__ == "__main__":
     # Load model
-    model = EfficientUNet5Down(in_channels=1, out_channels=2).to(DEVICE)
+    config = saved_configs["long-run"]
+    model = EfficientUNet5Down(
+        in_channels=1, out_channels=2, base_filters=config.base_filters
+    ).to(DEVICE)
     model.load_state_dict(torch.load(f"{SAVE_DIR}/model_best.pth", map_location=DEVICE))
     model.eval()
 
