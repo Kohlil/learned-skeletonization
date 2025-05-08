@@ -91,7 +91,7 @@ def save_test_predictions(model, dataloader, device):
 def plot_node_precision_recall(
     precision_dict,
     recall_dict,
-    save_path="./outputs/test_predictions/node_pr_curve.png",
+    save_path=f"{SAVE_DIR}/node_pr_curve.png",
 ):
     valences = [1, 2, 3, 4]
     precision = [precision_dict[v] for v in valences]
@@ -138,7 +138,7 @@ def plot_full_test_metrics(
     dice,
     test_loss,
     distance_mse,
-    save_path="./outputs/test_predictions/full_test_metrics.png",
+    save_path=f"{SAVE_DIR}/full_test_metrics.png",
 ):
     valences = [1, 2, 3, 4]
     precision_vals = [precision[v] for v in valences]
@@ -199,7 +199,7 @@ def plot_full_test_metrics(
 if __name__ == "__main__":
     # Load model
     model = EfficientUNet5Down(in_channels=1, out_channels=2).to(DEVICE)
-    model.load_state_dict(torch.load("./outputs/model_best.pth", map_location=DEVICE))
+    model.load_state_dict(torch.load(f"{SAVE_DIR}/model_best.pth", map_location=DEVICE))
     model.eval()
 
     # Load test data
