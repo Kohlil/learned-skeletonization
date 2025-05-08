@@ -284,7 +284,7 @@ def objective(params: Dict[str, Any], trials_obj: Trials, max_evals: int):
             beta=params["beta"],
             gamma=params["gamma"],
             base_filters=int(params["base_filters"]),
-            epochs=1,
+            epochs=30,
         )
         val_loss = train(config)
 
@@ -371,7 +371,7 @@ if __name__ == "__main__":
 
     if args.ablation:
         os.environ["HYPEROPT"] = "1"  # prevent saving full checkpoints
-        max_evals = 2
+        max_evals = 30
 
         trials_path = os.path.join(SAVE_DIR, "hyperopt_trials.pkl")
         if os.path.exists(trials_path):
