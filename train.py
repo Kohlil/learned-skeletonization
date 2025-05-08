@@ -170,6 +170,7 @@ def train(config: Config) -> float:
     optimizer = optim.Adam(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay
     )
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
 
     best_val_loss = float("inf")
     epochs_without_improvement = 0
@@ -258,6 +259,7 @@ def train(config: Config) -> float:
                 f"Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)"
             )
             break
+        scheduler.step()
 
     if not is_hyperopt:
         torch.save(model.state_dict(), os.path.join(SAVE_DIR, "model_final.pth"))
@@ -364,6 +366,20 @@ def load_trials(filename):
 
 
 # --------------- Main ---------------
+saved_configs = {
+    "long-run": Config(
+        name="default",
+        batch_size=4,
+        learning_rate=0.000109,
+        weight_decay=1e-5,
+        epochs=100,
+        alpha=0.540508,
+        beta=0.621463,
+        gamma=0.050541,
+        base_filters=64,
+    )
+}
+
 if __name__ == "__main__":
     print(f"Using {DEVICE}")
     os.makedirs(SAVE_DIR, exist_ok=True)
@@ -409,5 +425,4 @@ if __name__ == "__main__":
         print_summary(trials)
         print(f"Best hyperparameters found: {best}")
     else:
-        config = Config()
-        train(config)
+        train(saved_configs["long-run"])
